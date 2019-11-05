@@ -4,14 +4,28 @@ Record Expunge System
 Some thoughts on the Record Expunge System.
 
 
-Stack
------
+Table of Contents
+-----------------
+- [Project Stack](#project-stack)
+- [User Flow](#user-flow)
+- [Frontend Routes](#frontend-routes)
+- [Backend Endpoints](#backend-endpoints)
+- [Data Model](#data-model)
+- [Database Schema](#database)
+- [Database Functions](#database-functions)
 
-[ Web Server ]  -- Apache or Nginx, https enabled
+- [License](#license)
 
-[ Application ] -- JavaScript/ReactJS
+Project Stack
+-------------
 
-[ Micro Service ] [ Database ] -- Python, Flask, Requests, PostgreSQL, Psycopg, Swagger
+The app stack is deployed as three services in a Docker stack:
+
+[ Web Server ]  -- Nginx, https enabled. Serves static pages and proxies API calls
+
+[ Backend API ] -- Python, Flask, Psycopg
+
+[ Database ] -- PostgreSQL
 
 
 User Flow
@@ -61,8 +75,8 @@ If user chooses log out:
 - User is directed to login page
 
 
-Application Routes
-------------------
+Frontend Routes
+---------------
 
 These routes are set up in the front-end application for navigating between the different views.
 
@@ -106,8 +120,8 @@ Admin page for creating users
 - admin permissions (T/F)
 
 
-Back-End Endpoints
-------------------
+Backend Endpoints
+-----------------
 
 These endpoints comprise our API. All requests of these endpoints go through the web server.
 
@@ -118,7 +132,7 @@ Global headers:
 - `Accept: application/json`
 
 
-**`POST`** `/api/<version>/auth_token`
+**`POST`** `/api/auth_token`
 
 Post email, password to create an auth token (JWT) that can be used when
 accessing protected APIs
@@ -134,7 +148,9 @@ Returns: auth token
 
 - format: `JSON`
 - fields:
+    * user_id
     * auth_token
+
 
  Status codes:
 
@@ -143,68 +159,209 @@ Returns: auth token
 - `400 BAD FORMAT`: missing email or password
 
 
-**`POST`** `/api/<version>/users/`
+**`GET`** `/api/users/`
 
-Creates a user
+Fetches the list of existing users. requires admin authorization
+
+Required headers:
+
+- `Authorization: <JWT auth_token>`
+
+Returns: List of users:
+
+- format: `JSON`
+- fields:
+    * users :: list
+        * user_id
+        * email
+        * name
+        * group_name
+        * admin
+        * date_created_timestamp
+
+Status codes:
+
+- `200 OK`
+- `401 UNAUTHORIZED`: authorization rejected; missing or invalid auth token
+- `403 FORBIDDEN`: authorized user is not admin
+
+
+**`GET`** `/api/users/<user_id>`
+
+Returns the requested user's profile data. Requires admin authorization or that the logged-in user match the requested user_id.
+
+Required headers:
+
+- `Authorization: <JWT auth_token>`
+
+Returns:
+
+- format: `JSON`
+- fields:
+    * user_id
+    * email
+    * name
+    * group_name
+    * admin
+    * timestamp
+
+
+Status codes:
+
+- `200 OK`
+- `401 UNAUTHORIZED`: authorization rejected; missing or invalid auth token
+- `403 FORBIDDEN`: authorized user is not admin or doesn't match the requested user_id
+
+
+**`POST`** `/api/users/`
+
+Creates a new user. Requires an admin-level authorization token
+
+Required headers:
+
+- `Authorization: <JWT string>`
 
 `POST` body:
 
 - format: `JSON`
 - fields:
     * email
-    * encrypted password
-    * admin permissions
+    * name
+    * group_name
+    * password
+    * admin
 
 Returns: New user
 
 - format: `JSON`
 - fields:
+    * user_id
     * email
-    * admin permissions
+    * name
+    * group_name
+    * admin
     * timestamp
+
 
 Status codes:
 
 - `201 CREATED`: user creation was successful
-- `401 UNAUTHORIZED`: user creation was not succesful: user not found
 - `400 BAD FORMAT`: missing one or more fields
+- `401 UNAUTHORIZED`: authorization rejected; missing or invalid auth token
+- `403 FORBIDDEN`: authorized user is not admin
+- `422 UPROCESSABLE ENTITY`: duplicate user or password too short
 
 
-**`GET`** `/api/<version>/users/EMAIL`
+**`PUT`** `/api/users/<user_id>`
 
-Returns: Requested user
+Updates one or more data fields for an existing user. Requires admin authorization or that the logged-in user's id match the requested user_id.
+
+Required headers:
+
+- `Authorization: <JWT string>`
+
+`PUT` body:
+
+- format: `JSON`
+- fields (one or more of):
+    * email
+    * name
+    * group_name
+    * password
+    * admin
+
+Returns: Updated user
 
 - format: `JSON`
 - fields:
+    * user_id
     * email
-    * admin permissions
+    * name
+    * group_name
+    * admin
     * timestamp
+
 
 Status codes:
 
-- `200 OK`
+- `200 OK`: user update was successful
+- `400 BAD FORMAT`: missing one or more expected fields
+- `401 UNAUTHORIZED`: authorization rejected; missing or invalid auth token
+- `403 FORBIDDEN`: authorized user is not admin or doesn't match the requested user_id
+- `422 UPROCESSABLE ENTITY`: duplicate email or password too short
 
 
-**`POST`** `/api/<version>/search`
+**`POST`** `/api/oeci_login/`
 
-Performs search of remote system
+Requires a user authentication token.
+
+Attempts to log into the OECI web portal with the provided username and password. If successful, closes the session with OECI and returns those credientials encrypted in a cookie. No "logged in" state is maintained with the remote site. Instead, subsequent calls to the /api/search endpoint use the encrypted credentials to log in again before performing the search. Credentials are encrypted with Fernet cipher using the app's `JWT_SECRET_KEY` attribute as the symmetric key.
+
+
+Required headers:
+
+- `Authorization: <JWT string>`
 
 `POST` body:
 
 - format: `JSON`
 - fields:
-    * first name
-    * last name
-    * dob
+    * oeci_username
+    * oeci_password
+
+Returns: encrypted cookie
+
+- response body empty
+- cookie: encrypted json string
+  - fields:
+    * oeci_username
+    * oeci_password
+
+
+Status codes:
+
+- `201 CREATED`: credentials valided, encrypted, and returned
+- `400 BAD FORMAT`: missing data in request body or one or more fields
+- `401 UNAUTHORIZED`: authorization rejected; missing or invalid auth token
+- `401 UNAUTHORIZED`: oeci authorization rejected; incorrect username or password
+
+
+**`POST`** `/api/search`
+
+Requires a user authentication token.
+
+Performs search of remote system, using the search params provided in the request body. The oeci_login
+endpoint must get called beforehand to obtain the oeci_token cookie.
+
+Returns a serialized version of the Record object in the json response body. The `record` data object matches the format specified in /doc/results_format.json
+
+Also records anonymized stats based on the rearch results.
+
+Required headers:
+
+- `Authorization: <JWT auth_token>`
+
+Required cookie:
+
+- `{oeci_token: <encrypted result of /api/oeci_login attempt>}`
+
+`POST` body:
+
+- format: `JSON`
+- fields:
+    * first_name
+    * last_name
+    * middle_name
+    * birth_date
 
 Returns: Search results
 
 - format: `JSON`
 - fields:
-    * tbd
+    * record
 
 
-**`GET`** `/api/<version>/stats`
+**`GET`** `/api/stats`
 
 Reports on statistics run on data
 
@@ -215,23 +372,94 @@ Returns:
     * tbd
 
 
+Data Model
+----------
+
+#### Record:
+ - cases :: type list[Case]
+
+#### Case:
+ - name
+ - birth_year
+ - case_number
+ - citation_number
+ - date
+ - location
+ - violation_type
+ - current_status
+ - balance_due_in_cents
+ - case_detail_link
+ - charges # type list[Charge]
+
+#### Charge:
+ - name
+ - statute
+ - level
+ - date
+ - disposition :: type list[Disposition]
+ - expungement_result :: type ExpungementResult
+
+#### Disposition:
+ - date
+ - ruling
+
+#### ExpungementResult:
+ - type_eligibility :: type Optional[TypeEligibility]
+ - time_eligibility :: type Optional[TimeEligibility]
+
+#### TypeEligibility:
+ - status :: type EligibilityStatus
+ - reason :: type str
+
+#### TimeEligibility:
+ - status :: type bool
+ - reason :: type str
+ - date_will_be_eligible :: type Optional[date]
+
+#### EligibilityStatus: (Enum)
+ - ELIGIBLE
+ - NEEDS_MORE_ANALYSIS 
+ - INELIGIBLE
+
+
 Database Schema
 ---------------
 
 Tables:
 
-    users (uuid, email, hashed_password, password_salt, admin, date_created, date_modified), uuid primary key
+    users (uuid, email, admin, date_created, date_modified), uuid primary key
 
-    clients (uuid, first_name, last_name, dob, date_created, date_modified), uuid primary key
+    auth (uuid, hashed_password, user_id), uuid primary key
 
     result_codes (uuid, code) uuid primary key
 
     rules (uuid, text)
-
-    analysis (client_id, case_id, result_code, statute, date_eligible, rules[], date_created, date_modified, expunged, date_expunged) 
 
 
 Notes:
 
 - Store passwords encrypted
 - Use Postgres features for exporting JSON
+
+Database Functions
+--------------
+Functions that query or update the database will be organized into a single module in the expungeservice.
+
+    create_user(database, email, admin, hashed_password)
+
+Insert a new user into the Users table with the given email string and admin flag, and inserts the password hash into the Auth table and link it with the User uuid. The uuid of each, and the date_created and date_updated are generated within the database.
+
+This pair of inserts is an atomic operation, so if one fails then the other one is cancelled and has no effect.
+If successful, returns an OrderedDictionary object containing the created entry. Otherwise throws the relevant error.
+
+    get_user_by_email(database, email)
+
+Return the user data identified by the given email string, in OrderedDictionary format. Contains the email string, hashed_password, admin flag, and the UUIDs for user and auth. If no such user exists, returns None. Throw any errors generated by the database.
+
+    save_stats(database, email, record)
+
+Takes a Record object which has processed by the expungement analyzer. Saves only a limited amount of information. Details tbd, but here are a few examples for tracking app usage and app impact:
+ -  User activity: When a search is performed, log the username and timestamp; but not the search parameters.
+  - Expunged charges: record the individual charges, by their crime level, some eligibility information, and the month that the search was performed.
+     * An inexact timestamp makes it hard to reconstruct a complete record which could then be de-anonymized.
+     * Eligibility information could be kept vague, e.g, only "eligible", "not eligible", "time-eligible", and "undetermined", as opposed to keeping the detailed analysis returned by the expunger.

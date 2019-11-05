@@ -81,6 +81,7 @@ db.sqlite3
 
 # Flask stuff:
 instance/
+logs/*
 .webassets-cache
 
 # Scrapy stuff:
@@ -132,3 +133,12 @@ venv.bak/
 
 # PyCharm editors
 .idea/
+
+# Ignore CLI documents
+Documents/
+
+# Postgres data volume mount
+config/postgres/data
+
+#VS Code Files
+.vscode

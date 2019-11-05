@@ -1,6 +1,8 @@
 import requests
 
-from expungeservice.crawler.models.charge import Charge
+from expungeservice.models.charge import Charge
+from expungeservice.models.disposition import Disposition
+from expungeservice.models.record import Record
 from expungeservice.crawler.parsers.param_parser import ParamParser
 from expungeservice.crawler.parsers.node_parser import NodeParser
 from expungeservice.crawler.parsers.record_parser import RecordParser
@@ -15,11 +17,15 @@ class Crawler:
         self.response = requests.Response
         self.result = RecordParser()
 
-    def login(self, username, password):
+    def login(self, username, password, close_session=False):
         url = URL.login_url()
         payload = Payload.login_payload(username, password)
 
         self.response = self.session.post(url, data=payload)
+
+        if close_session:
+            self.session.close()
+
         return Crawler.__login_validation(self.response, url)
 
     def search(self, first_name, last_name, middle_name='', birth_date=''):
@@ -36,10 +42,12 @@ class Crawler:
             case_parser = self.__parse_case(case)
             case.set_balance_due(case_parser.balance_due)
             for charge_id, charge in case_parser.hashed_charge_data.items():
+                charge['case'] = case
                 new_charge = Crawler.__build_charge(charge_id, charge, case_parser)
                 case.charges.append(new_charge)
 
         self.session.close()
+        return Record(self.result.cases)
 
     def __parse_nodes(self, url):
         node_parser = NodeParser()
@@ -65,8 +73,7 @@ class Crawler:
 
     @staticmethod
     def __build_charge(charge_id, charge, case_parser):
-        new_charge = Charge(**charge)
         if case_parser.hashed_dispo_data.get(charge_id):
-            new_charge.disposition.date = case_parser.hashed_dispo_data[charge_id].get('date')
-            new_charge.disposition.ruling = case_parser.hashed_dispo_data[charge_id].get('ruling')
-        return new_charge
+            charge['disposition'] = Disposition(case_parser.hashed_dispo_data[charge_id].get('date'),
+                                                case_parser.hashed_dispo_data[charge_id].get('ruling'))
+        return Charge.create(**charge)
